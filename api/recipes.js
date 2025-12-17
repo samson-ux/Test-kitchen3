@@ -31,7 +31,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
+        max_tokens: 2000,
         messages: [{
           role: 'user',
           content: `I have these ingredients: ${ingredients.join(', ')}.
@@ -42,8 +42,15 @@ Please suggest exactly 5 creative and delicious recipes I can make. For each rec
 3. Estimated cooking time
 4. Number of servings
 5. Additional ingredients needed (if any, or empty array)
+6. Estimated calories per serving
+7. Protein in grams per serving
+8. Carbs in grams per serving
+9. Fat in grams per serving
+10. A real recipe URL from a popular cooking website (AllRecipes, Food Network, BBC Good Food, Serious Eats, Bon Appetit, etc.) that matches this recipe or is very similar
 
-Format your response as JSON only, no other text. Use this exact structure:
+CRITICAL: You must respond with ONLY valid JSON. No explanations, no markdown, no code blocks, no preamble, no extra text. Just pure JSON starting with { and ending with }.
+
+Use this exact structure:
 {
   "recipes": [
     {
@@ -51,12 +58,17 @@ Format your response as JSON only, no other text. Use this exact structure:
       "description": "Brief description",
       "cookingTime": "30 minutes",
       "servings": 4,
-      "additionalIngredients": ["ingredient1", "ingredient2"]
+      "additionalIngredients": ["ingredient1", "ingredient2"],
+      "calories": 450,
+      "protein": 25,
+      "carbs": 35,
+      "fat": 18,
+      "recipeUrl": "https://www.allrecipes.com/recipe/..."
     }
   ]
 }`
         }],
-        system: 'You are a creative chef AI. Respond ONLY with valid JSON, no preamble or markdown formatting.'
+        system: 'You are a recipe suggestion API. You MUST respond with ONLY valid JSON. Never include markdown code blocks, explanations, or any text outside the JSON object. Start your response with { and end with }. No ```json or ``` markers.'
       })
     });
 
@@ -67,18 +79,57 @@ Format your response as JSON only, no other text. Use this exact structure:
     }
 
     const data = await response.json();
-    const textContent = data.content
+    let textContent = data.content
       .filter(item => item.type === 'text')
       .map(item => item.text)
       .join('');
 
-    // Clean up response
-    let cleanedText = textContent.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed = JSON.parse(cleanedText);
+    console.log('Raw response:', textContent.substring(0, 200));
+
+    // Aggressive cleanup of the response
+    textContent = textContent.trim();
+    
+    // Remove markdown code blocks
+    textContent = textContent.replace(/```json\s*/g, '');
+    textContent = textContent.replace(/```\s*/g, '');
+    
+    // Remove any text before the first {
+    const firstBrace = textContent.indexOf('{');
+    if (firstBrace > 0) {
+      textContent = textContent.substring(firstBrace);
+    }
+    
+    // Remove any text after the last }
+    const lastBrace = textContent.lastIndexOf('}');
+    if (lastBrace !== -1 && lastBrace < textContent.length - 1) {
+      textContent = textContent.substring(0, lastBrace + 1);
+    }
+
+    console.log('Cleaned response:', textContent.substring(0, 200));
+
+    let parsed;
+    try {
+      parsed = JSON.parse(textContent);
+    } catch (parseError) {
+      console.error('JSON parse error:', parseError);
+      console.error('Failed to parse:', textContent);
+      return res.status(500).json({ 
+        error: 'AI returned invalid response. Please try again.',
+        details: parseError.message 
+      });
+    }
+
+    // Validate the response structure
+    if (!parsed.recipes || !Array.isArray(parsed.recipes)) {
+      return res.status(500).json({ error: 'Invalid recipe format from AI' });
+    }
 
     return res.status(200).json(parsed);
   } catch (error) {
     console.error('Error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ 
+      error: 'Internal server error',
+      message: error.message 
+    });
   }
 }
