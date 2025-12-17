@@ -31,26 +31,35 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
+        max_tokens: 4000,
         messages: [{
           role: 'user',
-          content: `I have these ingredients: ${ingredients.join(', ')}.
+          content: `I need you to find real recipes online that use these ingredients: ${ingredients.join(', ')}.
 
-Please suggest exactly 5 creative and delicious recipes I can make. For each recipe, provide:
-1. Recipe name
-2. Brief description (1 sentence)
+Use web search to find up to 5 actual recipes from real cooking websites (AllRecipes, Food Network, BBC Good Food, Serious Eats, Bon Appetit, NYT Cooking, etc.).
+
+For each recipe you find, provide:
+1. Recipe name (exact name from the website)
+2. Brief description
 3. Estimated cooking time
 4. Number of servings
-5. Additional ingredients needed (if any, or empty array)
+5. Additional ingredients needed beyond what I have
 6. Estimated calories per serving
 7. Protein in grams per serving
 8. Carbs in grams per serving
 9. Fat in grams per serving
-10. A real recipe URL from a popular cooking website (AllRecipes, Food Network, BBC Good Food, Serious Eats, Bon Appetit, etc.) that matches this recipe or is very similar
+10. The actual URL to the recipe
 
-CRITICAL: You must respond with ONLY valid JSON. No explanations, no markdown, no code blocks, no preamble, no extra text. Just pure JSON starting with { and ending with }.
+Important:
+- Find as many recipes as you can (up to 5)
+- If you can only find 1-4 recipes, that's fine - return what you find
+- If you cannot find ANY recipes with these ingredients, return an empty recipes array
+- Only include recipes that actually exist online with real URLs
+- The URLs must be real and working
 
-Use this exact structure:
+CRITICAL: Respond with ONLY valid JSON. No markdown, no explanations, just JSON.
+
+Format:
 {
   "recipes": [
     {
@@ -63,12 +72,18 @@ Use this exact structure:
       "protein": 25,
       "carbs": 35,
       "fat": 18,
-      "recipeUrl": "https://www.allrecipes.com/recipe/..."
+      "recipeUrl": "https://www.actualwebsite.com/recipe/..."
     }
   ]
 }`
         }],
-        system: 'You are a recipe suggestion API. You MUST respond with ONLY valid JSON. Never include markdown code blocks, explanations, or any text outside the JSON object. Start your response with { and end with }. No ```json or ``` markers.'
+        system: 'You are a recipe search assistant with web search capabilities. Search the web for real recipes using the provided ingredients. Only return recipes that actually exist online with real URLs. Respond with ONLY valid JSON, no markdown or extra text.',
+        tools: [
+          {
+            "type": "web_search_20250305",
+            "name": "web_search"
+          }
+        ]
       })
     });
 
@@ -79,33 +94,33 @@ Use this exact structure:
     }
 
     const data = await response.json();
-    let textContent = data.content
-      .filter(item => item.type === 'text')
-      .map(item => item.text)
-      .join('');
-
-    console.log('Raw response:', textContent.substring(0, 200));
-
-    // Aggressive cleanup of the response
-    textContent = textContent.trim();
     
-    // Remove markdown code blocks
+    // Extract text content from all content blocks
+    let textContent = '';
+    for (const item of data.content) {
+      if (item.type === 'text') {
+        textContent += item.text;
+      }
+    }
+
+    console.log('Raw response:', textContent.substring(0, 300));
+
+    // Aggressive cleanup
+    textContent = textContent.trim();
     textContent = textContent.replace(/```json\s*/g, '');
     textContent = textContent.replace(/```\s*/g, '');
     
-    // Remove any text before the first {
     const firstBrace = textContent.indexOf('{');
     if (firstBrace > 0) {
       textContent = textContent.substring(firstBrace);
     }
     
-    // Remove any text after the last }
     const lastBrace = textContent.lastIndexOf('}');
     if (lastBrace !== -1 && lastBrace < textContent.length - 1) {
       textContent = textContent.substring(0, lastBrace + 1);
     }
 
-    console.log('Cleaned response:', textContent.substring(0, 200));
+    console.log('Cleaned response:', textContent.substring(0, 300));
 
     let parsed;
     try {
@@ -119,9 +134,17 @@ Use this exact structure:
       });
     }
 
-    // Validate the response structure
+    // Validate structure
     if (!parsed.recipes || !Array.isArray(parsed.recipes)) {
       return res.status(500).json({ error: 'Invalid recipe format from AI' });
+    }
+
+    // Check if no recipes found
+    if (parsed.recipes.length === 0) {
+      return res.status(200).json({ 
+        recipes: [],
+        message: 'No recipes found with these ingredients. Try different ingredients or add more!'
+      });
     }
 
     return res.status(200).json(parsed);
